@@ -527,5 +527,20 @@ async def timezone_cmd(interaction: discord.Interaction, timezone: str):
 
 bot.tree.add_command(session_group)
 
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    """Log the error and tell the user, instead of leaving the command on 'thinking...'."""
+    original = getattr(error, "original", error)
+    log.error("Command failed: %s", getattr(interaction.command, "qualified_name", "?"), exc_info=original)
+    msg = f"⚠️ Something went wrong ({type(original).__name__}: {str(original)[:150]}). Please try again."
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(msg, ephemeral=True)
+    except discord.HTTPException:
+        pass
+
 if __name__ == "__main__":
     bot.run(TOKEN)
