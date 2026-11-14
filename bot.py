@@ -17,7 +17,7 @@ from discord.ext import tasks
 from dotenv import load_dotenv
 
 from db import DB
-from formations import FORMATIONS, slots_for
+from formations import FORMATIONS, slot_map, slots_for
 from render import render_pitch
 from timeparse import to_timestamp
 
@@ -28,8 +28,14 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ["DISCORD_TOKEN"]
 DB_PATH = os.getenv("DB_PATH", "proclubs.db")
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # optional: instant command sync to one server
-REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "30"))
+REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "15"))
 CLOSE_AFTER_HOURS = 3
+REMIND_LABELS = {
+    "channel": "ping in channel",
+    "dm": "DM to each player",
+    "both": "channel ping + DM",
+    "none": "off",
+}
 
 db = DB(DB_PATH)
 ALL_TZ = sorted(available_timezones())
@@ -95,7 +101,8 @@ async def build_message(session) -> tuple[discord.Embed, discord.File]:
     embed = discord.Embed(title=title, color=color)
     embed.description = (
         f"🗓️ <t:{ts}:F>\n⏳ <t:{ts}:R>\n"
-        f"📋 Formation **{session['formation']}** · Host <@{session['creator_id']}>"
+        f"📋 Formation **{session['formation']}** · Host <@{session['creator_id']}>\n"
+        f"🔔 Reminder {REMIND_MINUTES} min before: {REMIND_LABELS.get(session['remind_mode'], 'ping in channel')}"
     )
     lineup = []
     for s in slots_for(session["formation"]):
@@ -250,14 +257,8 @@ class ProClubsBot(discord.Client):
                 if not s["reminded"] and 0 < s["start_ts"] - now <= REMIND_MINUTES * 60:
                     db.mark_reminded(s["id"])
                     people = [r for r in db.rsvps(s["id"]) if r["status"] in ("in", "sub")]
-                    if people:
-                        mentions = " ".join(f"<@{r['user_id']}>" for r in people)
-                        channel = self.get_channel(s["channel_id"]) or await self.fetch_channel(s["channel_id"])
-                        await channel.send(
-                            f"⏰ **{s['title']}** kicks off <t:{s['start_ts']}:R>! {mentions}",
-                            reference=channel.get_partial_message(s["message_id"]),
-                            allowed_mentions=discord.AllowedMentions(users=True),
-                        )
+                    if people and s["remind_mode"] != "none":
+                        await self.send_reminders(s, people)
                 if now > s["start_ts"] + CLOSE_AFTER_HOURS * 3600:
                     db.set_status(s["id"], "closed")
                     await refresh_message(self, s["id"])
@@ -265,6 +266,32 @@ class ProClubsBot(discord.Client):
                 db.set_status(s["id"], "closed")  # message/channel gone
             except Exception:
                 log.exception("housekeeping failed for session %s", s["id"])
+
+    async def send_reminders(self, s, people):
+        mode = s["remind_mode"]
+        ts = s["start_ts"]
+        link = f"https://discord.com/channels/{s['guild_id']}/{s['channel_id']}/{s['message_id']}"
+        smap = slot_map(s["formation"])
+        failed = []
+        if mode in ("dm", "both"):
+            for r in people:
+                pos = smap[r["slot"]].label if r["status"] == "in" and r["slot"] in smap else "Bench / Flex"
+                try:
+                    dm = await self.create_dm(discord.Object(id=r["user_id"]))
+                    await dm.send(f"⏰ **{s['title']}** kicks off <t:{ts}:R>!\nYour spot: **{pos}**\n{link}")
+                except (discord.Forbidden, discord.HTTPException):
+                    failed.append(r)  # DMs closed or user unreachable
+        # who gets an @ping in the channel: everyone for channel/both, only failed DMs for dm mode
+        pinged = people if mode in ("channel", "both") else failed
+        if pinged:
+            mentions = " ".join(f"<@{r['user_id']}>" for r in pinged)
+            note = "" if mode in ("channel", "both") else " (couldn't DM you)"
+            channel = self.get_channel(s["channel_id"]) or await self.fetch_channel(s["channel_id"])
+            await channel.send(
+                f"⏰ **{s['title']}** kicks off <t:{ts}:R>! {mentions}{note}",
+                reference=channel.get_partial_message(s["message_id"]),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
 
     @housekeeping.before_loop
     async def _wait(self):
@@ -297,8 +324,17 @@ async def session_autocomplete(interaction: discord.Interaction, current: str):
     time="e.g. 20:30, 8pm, 8:30pm",
     title="Optional title (default: Pro Clubs Session)",
     timezone="Override your saved timezone (e.g. Europe/London)",
+    reminder="How to remind players before kickoff (default: ping in channel)",
 )
-@app_commands.choices(formation=[app_commands.Choice(name=f, value=f) for f in FORMATIONS])
+@app_commands.choices(
+    formation=[app_commands.Choice(name=f, value=f) for f in FORMATIONS],
+    reminder=[
+        app_commands.Choice(name="Ping players in the channel", value="channel"),
+        app_commands.Choice(name="DM each player", value="dm"),
+        app_commands.Choice(name="Both channel ping and DM", value="both"),
+        app_commands.Choice(name="No reminder", value="none"),
+    ],
+)
 @app_commands.autocomplete(timezone=tz_autocomplete)
 async def create(
     interaction: discord.Interaction,
@@ -307,6 +343,7 @@ async def create(
     time: str,
     title: str = "Pro Clubs Session",
     timezone: Optional[str] = None,
+    reminder: Optional[app_commands.Choice[str]] = None,
 ):
     tz = timezone or db.get_tz(interaction.user.id) or "UTC"
     try:
@@ -319,7 +356,8 @@ async def create(
 
     await interaction.response.defer()
     sid = db.create_session(
-        interaction.guild_id, interaction.channel_id, interaction.user.id, title[:100], formation.value, ts
+        interaction.guild_id, interaction.channel_id, interaction.user.id, title[:100], formation.value, ts,
+        reminder.value if reminder else "channel",
     )
     session = db.get_session(sid)
     embed, file = await build_message(session)

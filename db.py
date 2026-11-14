@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     formation   TEXT NOT NULL,
     start_ts    INTEGER NOT NULL,
     status      TEXT NOT NULL DEFAULT 'open',   -- open | closed | cancelled
-    reminded    INTEGER NOT NULL DEFAULT 0
+    reminded    INTEGER NOT NULL DEFAULT 0,
+    remind_mode TEXT NOT NULL DEFAULT 'channel'   -- channel | dm | both | none
 );
 CREATE TABLE IF NOT EXISTS rsvps (
     session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -47,6 +48,9 @@ class DB:
         self._lock = threading.Lock()
         with self._tx() as c:
             c.executescript(SCHEMA)
+            scols = {r["name"] for r in c.execute("PRAGMA table_info(sessions)")}
+            if "remind_mode" not in scols:  # migrate DBs created before reminder modes
+                c.execute("ALTER TABLE sessions ADD COLUMN remind_mode TEXT NOT NULL DEFAULT 'channel'")
             cols = {r["name"] for r in c.execute("PRAGMA table_info(rsvps)")}
             if "avatar_url" not in cols:  # migrate DBs created before avatars
                 c.execute("ALTER TABLE rsvps ADD COLUMN avatar_url TEXT")
@@ -62,12 +66,13 @@ class DB:
                 raise
 
     # ---- sessions -------------------------------------------------------
-    def create_session(self, guild_id, channel_id, creator_id, title, formation, start_ts) -> int:
+    def create_session(self, guild_id, channel_id, creator_id, title, formation, start_ts,
+                       remind_mode: str = "channel") -> int:
         with self._tx() as c:
             cur = c.execute(
-                "INSERT INTO sessions(guild_id, channel_id, creator_id, title, formation, start_ts)"
-                " VALUES (?,?,?,?,?,?)",
-                (guild_id, channel_id, creator_id, title, formation, start_ts),
+                "INSERT INTO sessions(guild_id, channel_id, creator_id, title, formation, start_ts, remind_mode)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (guild_id, channel_id, creator_id, title, formation, start_ts, remind_mode),
             )
             return cur.lastrowid
 
