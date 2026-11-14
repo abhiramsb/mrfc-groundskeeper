@@ -88,6 +88,33 @@ class DB:
         with self._tx() as c:
             c.execute("UPDATE sessions SET status=? WHERE id=?", (status, session_id))
 
+    def update_session(self, session_id: int, **fields) -> None:
+        allowed = {"title", "start_ts", "remind_mode", "reminded"}
+        fields = {k: v for k, v in fields.items() if k in allowed}
+        if not fields:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        with self._tx() as c:
+            c.execute(f"UPDATE sessions SET {sets} WHERE id=?", (*fields.values(), session_id))
+
+    def change_formation(self, session_id: int, formation: str, valid_keys: list[str]):
+        """Switch formation. Players whose position doesn't exist in the new formation
+        move to the bench. Returns [(user_id, name), ...] of the players who were moved."""
+        moved = []
+        with self._tx() as c:
+            rows = c.execute(
+                "SELECT user_id, name, slot FROM rsvps WHERE session_id=? AND status='in'", (session_id,)
+            ).fetchall()
+            for r in rows:
+                if r["slot"] not in valid_keys:
+                    c.execute(
+                        "UPDATE rsvps SET status='sub', slot=NULL WHERE session_id=? AND user_id=?",
+                        (session_id, r["user_id"]),
+                    )
+                    moved.append((r["user_id"], r["name"]))
+            c.execute("UPDATE sessions SET formation=? WHERE id=?", (formation, session_id))
+        return moved
+
     def mark_reminded(self, session_id: int) -> None:
         with self._tx() as c:
             c.execute("UPDATE sessions SET reminded=1 WHERE id=?", (session_id,))

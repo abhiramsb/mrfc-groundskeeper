@@ -7,6 +7,7 @@ import io
 import logging
 import os
 import time as _time
+from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo, available_timezones
 
@@ -387,6 +388,104 @@ async def cancel(interaction: discord.Interaction, session_id: int):
     await interaction.response.defer(ephemeral=True)
     await refresh_message(interaction.client, session_id)
     await interaction.followup.send("Session cancelled.", ephemeral=True)
+
+
+@session_group.command(name="edit", description="Change a game's formation, time, title or reminder")
+@app_commands.describe(
+    session_id="Which game to edit",
+    formation="New formation (players in positions that don't exist move to the bench)",
+    date="New date: YYYY-MM-DD, DD/MM, today, tomorrow or a weekday (keeps the current date if empty)",
+    time="New time, e.g. 20:30 or 8pm (keeps the current time if empty)",
+    title="New title",
+    timezone="Timezone for the new date/time (default: your saved timezone)",
+    reminder="New reminder style",
+)
+@app_commands.choices(
+    formation=[app_commands.Choice(name=f, value=f) for f in FORMATIONS],
+    reminder=[
+        app_commands.Choice(name="Ping players in the channel", value="channel"),
+        app_commands.Choice(name="DM each player", value="dm"),
+        app_commands.Choice(name="Both channel ping and DM", value="both"),
+        app_commands.Choice(name="No reminder", value="none"),
+    ],
+)
+@app_commands.autocomplete(session_id=session_autocomplete, timezone=tz_autocomplete)
+async def edit(
+    interaction: discord.Interaction,
+    session_id: int,
+    formation: Optional[app_commands.Choice[str]] = None,
+    date: Optional[str] = None,
+    time: Optional[str] = None,
+    title: Optional[str] = None,
+    timezone: Optional[str] = None,
+    reminder: Optional[app_commands.Choice[str]] = None,
+):
+    session = db.get_session(session_id)
+    if not session or session["guild_id"] != interaction.guild_id or session["status"] != "open":
+        return await interaction.response.send_message("Open game not found.", ephemeral=True)
+    if not _can_manage(interaction, session):
+        return await interaction.response.send_message("Only the host can edit this.", ephemeral=True)
+    if not any([formation, date, time, title, reminder]):
+        return await interaction.response.send_message("Nothing to change - pick at least one option.", ephemeral=True)
+
+    changes: dict = {}
+    time_changed = False
+    new_ts = session["start_ts"]
+    if date or time:
+        tz = timezone or db.get_tz(interaction.user.id) or "UTC"
+        try:
+            cur = datetime.fromtimestamp(session["start_ts"], ZoneInfo(tz))
+            new_ts = to_timestamp(date or cur.strftime("%Y-%m-%d"), time or cur.strftime("%H:%M"), tz)
+        except Exception as e:
+            return await interaction.response.send_message(f"❌ {e}", ephemeral=True)
+        if new_ts < int(_time.time()):
+            return await interaction.response.send_message("❌ That time is in the past.", ephemeral=True)
+        if new_ts != session["start_ts"]:
+            changes["start_ts"] = new_ts
+            changes["reminded"] = 0  # send the reminder again for the new time
+            time_changed = True
+    if title:
+        changes["title"] = title[:100]
+    if reminder:
+        changes["remind_mode"] = reminder.value
+
+    await interaction.response.defer(ephemeral=True)
+    moved = []
+    formation_changed = bool(formation and formation.value != session["formation"])
+    if formation_changed:
+        moved = db.change_formation(session_id, formation.value, [s.key for s in slots_for(formation.value)])
+    if changes:
+        db.update_session(session_id, **changes)
+    await refresh_message(interaction.client, session_id)
+
+    # tell the players what changed
+    parts, ping = [], set()
+    if time_changed:
+        parts.append(f"🕒 New time: <t:{new_ts}:F> (<t:{new_ts}:R>)")
+        ping |= {r["user_id"] for r in db.rsvps(session_id) if r["status"] in ("in", "sub")}
+    if formation_changed:
+        line = f"📋 Formation is now **{formation.value}**."
+        if moved:
+            line += " Moved to the bench, please pick a new position: " + ", ".join(f"<@{u}>" for u, _ in moved)
+            ping |= {u for u, _ in moved}
+        parts.append(line)
+    if parts:
+        latest = db.get_session(session_id)
+        try:
+            channel = interaction.client.get_channel(latest["channel_id"]) or await interaction.client.fetch_channel(latest["channel_id"])
+            mentions = " ".join(f"<@{u}>" for u in sorted(ping))
+            await channel.send(
+                f"✏️ **{latest['title']}** updated by {interaction.user.mention}\n" + "\n".join(parts)
+                + (f"\n{mentions}" if mentions and time_changed else ""),
+                reference=channel.get_partial_message(latest["message_id"]),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except (discord.NotFound, discord.Forbidden):
+            pass
+    summary = "Updated."
+    if moved:
+        summary += f" {len(moved)} player(s) moved to the bench because their position isn't in {formation.value}."
+    await interaction.followup.send(summary, ephemeral=True)
 
 
 @session_group.command(name="kick", description="Remove a player from a position (host or managers)")
