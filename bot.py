@@ -272,7 +272,7 @@ class ProClubsBot(discord.Client):
 
 
 bot = ProClubsBot()
-session_group = app_commands.Group(name="session", description="Pro Clubs sessions", guild_only=True)
+session_group = app_commands.Group(name="game", description="Pro Clubs sessions", guild_only=True)
 
 
 async def tz_autocomplete(interaction: discord.Interaction, current: str):
