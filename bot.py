@@ -214,15 +214,33 @@ class ProClubsBot(discord.Client):
             if s["message_id"]:
                 self.add_view(SessionView(s["id"]), message_id=s["message_id"])
         if DEV_GUILD_ID:
+            # dev mode: commands live in ONE server only, so wipe the global copy
             guild = discord.Object(id=int(DEV_GUILD_ID))
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
         else:
             await self.tree.sync()
         self.housekeeping.start()
 
     async def on_ready(self):
         log.info("Logged in as %s (%s)", self.user, self.user.id)
+        if not DEV_GUILD_ID and not getattr(self, "_purged", False):
+            self._purged = True
+            await self._purge_guild_commands()
+
+    async def _purge_guild_commands(self):
+        """Remove leftover server-specific commands (from an earlier DEV_GUILD_ID run)
+        so they don't show up twice next to the global ones."""
+        for g in self.guilds:
+            try:
+                if await self.tree.fetch_commands(guild=g):
+                    self.tree.clear_commands(guild=g)
+                    await self.tree.sync(guild=g)
+                    log.info("Removed stale server-specific commands from guild %s", g.id)
+            except discord.HTTPException:
+                log.warning("Could not check commands for guild %s", g.id)
 
     @tasks.loop(seconds=60)
     async def housekeeping(self):
