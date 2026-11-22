@@ -30,6 +30,9 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 DB_PATH = os.getenv("DB_PATH", "proclubs.db")
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")  # optional: instant command sync to one server
 REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "15"))
+# Optional access control. When unset, behaviour is unchanged (anyone can create sessions anywhere).
+CAPTAIN_ROLE_ID = int(os.getenv("CAPTAIN_ROLE_ID", "0") or 0)        # role allowed to create/manage sessions
+SESSIONS_CHANNEL_ID = int(os.getenv("SESSIONS_CHANNEL_ID", "0") or 0)  # only channel where /game create works
 CLOSE_AFTER_HOURS = 3
 REMIND_LABELS = {
     "channel": "ping in channel",
@@ -346,6 +349,14 @@ async def create(
     timezone: Optional[str] = None,
     reminder: Optional[app_commands.Choice[str]] = None,
 ):
+    if CAPTAIN_ROLE_ID and not _is_captain(interaction):
+        return await interaction.response.send_message(
+            f"❌ Only <@&{CAPTAIN_ROLE_ID}> can create sessions.", ephemeral=True
+        )
+    if SESSIONS_CHANNEL_ID and interaction.channel_id != SESSIONS_CHANNEL_ID:
+        return await interaction.response.send_message(
+            f"❌ Create sessions in <#{SESSIONS_CHANNEL_ID}>.", ephemeral=True
+        )
     tz = timezone or db.get_tz(interaction.user.id) or "UTC"
     try:
         ZoneInfo(tz)
@@ -371,9 +382,16 @@ async def create(
         )
 
 
+def _is_captain(interaction: discord.Interaction) -> bool:
+    """True for server managers, or members holding CAPTAIN_ROLE_ID."""
+    if interaction.permissions.manage_guild:
+        return True
+    roles = getattr(interaction.user, "roles", [])
+    return bool(CAPTAIN_ROLE_ID) and any(r.id == CAPTAIN_ROLE_ID for r in roles)
+
+
 def _can_manage(interaction: discord.Interaction, session) -> bool:
-    perms = interaction.permissions
-    return interaction.user.id == session["creator_id"] or perms.manage_guild
+    return interaction.user.id == session["creator_id"] or _is_captain(interaction)
 
 
 @session_group.command(name="cancel", description="Cancel a session (host or server managers)")
