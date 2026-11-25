@@ -34,6 +34,8 @@ REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "15"))
 CAPTAIN_ROLE_ID = int(os.getenv("CAPTAIN_ROLE_ID", "0") or 0)        # role allowed to create/manage sessions
 SESSIONS_CHANNEL_ID = int(os.getenv("SESSIONS_CHANNEL_ID", "0") or 0)  # only channel where /game create works
 CLUB_NAME = os.getenv("CLUB_NAME", "MRFC Academy")          # exact in-game club name
+CLUB_LANGUAGE = os.getenv("CLUB_LANGUAGE", "English only")
+CLUB_REGION = os.getenv("CLUB_REGION", "Southern Asia 1")   # matchmaking region
 CLUB_EXTRA = os.getenv("CLUB_EXTRA", "").strip()            # optional extra line for /club (e.g. platform note)
 CLOSE_AFTER_HOURS = 3
 REMIND_LABELS = {
@@ -549,7 +551,9 @@ async def timezone_cmd(interaction: discord.Interaction, timezone: str):
 async def club_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
         title=f"Find {CLUB_NAME} in EA FC",
-        description=f"Club name to search for: **{CLUB_NAME}**",
+        description=f"Club name to search for: **{CLUB_NAME}**\n"
+                    f"Language: **{CLUB_LANGUAGE}**\n"
+                    f"Matchmaking Region: **{CLUB_REGION}**",
         color=0x2ECC71,
     )
     embed.add_field(

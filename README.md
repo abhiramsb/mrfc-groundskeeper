@@ -14,6 +14,8 @@ their avatars and sends reminders before kickoff.
 | `CAPTAIN_ROLE_ID` | optional: ID of the **MRFC Captain** role. When set, only this role (and server managers) can create, edit, cancel and kick |
 | `SESSIONS_CHANNEL_ID` | optional: ID of `#mrfc-sessions`. When set, `/game create` only works there |
 | `CLUB_NAME` | optional: in-game club name shown by `/club`, default `MRFC Academy` |
+| `CLUB_LANGUAGE` | optional: language shown by `/club`, default `English only` |
+| `CLUB_REGION` | optional: matchmaking region shown by `/club`, default `Southern Asia 1` |
 | `CLUB_EXTRA` | optional: extra note shown at the bottom of `/club` (e.g. platform) |
 | `REMIND_MINUTES` | minutes before kickoff to remind, default 15 |
 | `DB_PATH` | default `proclubs.db` |
