@@ -33,6 +33,8 @@ REMIND_MINUTES = int(os.getenv("REMIND_MINUTES", "15"))
 # Optional access control. When unset, behaviour is unchanged (anyone can create sessions anywhere).
 CAPTAIN_ROLE_ID = int(os.getenv("CAPTAIN_ROLE_ID", "0") or 0)        # role allowed to create/manage sessions
 SESSIONS_CHANNEL_ID = int(os.getenv("SESSIONS_CHANNEL_ID", "0") or 0)  # only channel where /game create works
+CLUB_NAME = os.getenv("CLUB_NAME", "MRFC Academy")          # exact in-game club name
+CLUB_EXTRA = os.getenv("CLUB_EXTRA", "").strip()            # optional extra line for /club (e.g. platform note)
 CLOSE_AFTER_HOURS = 3
 REMIND_LABELS = {
     "channel": "ping in channel",
@@ -541,6 +543,42 @@ async def timezone_cmd(interaction: discord.Interaction, timezone: str):
         return await interaction.response.send_message("Unknown timezone — pick one from the suggestions.", ephemeral=True)
     db.set_tz(interaction.user.id, timezone)
     await interaction.response.send_message(f"Timezone saved: **{timezone}**", ephemeral=True)
+
+
+@bot.tree.command(name="club", description="How to find and join our club in EA FC Pro Clubs")
+async def club_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title=f"Find {CLUB_NAME} in EA FC",
+        description=f"Club name to search for: **{CLUB_NAME}**",
+        color=0x2ECC71,
+    )
+    embed.add_field(
+        name="1. Open Pro Clubs",
+        value="From the EA FC main menu, go to **Pro Clubs** and open the **Clubs** / **Find a Club** section.",
+        inline=False,
+    )
+    embed.add_field(
+        name="2. Search by name",
+        value=f"Search for **{CLUB_NAME}** (type it exactly). If several clubs show up, "
+              "pick the one with our crest. Don't see it? Check that you searched on the same platform as us "
+              "and clear any filters.",
+        inline=False,
+    )
+    embed.add_field(
+        name="3. Request to join",
+        value="Open the club and choose **Request to Join**. Then post your EA ID / gamertag here so a "
+              "Captain can accept you quickly.",
+        inline=False,
+    )
+    embed.add_field(
+        name="Can't find it?",
+        value="Tell a **MRFC Captain** your exact EA ID. They can invite you directly from inside the game.",
+        inline=False,
+    )
+    if CLUB_EXTRA:
+        embed.add_field(name="Note", value=CLUB_EXTRA[:1000], inline=False)
+    embed.set_footer(text="Menu names can differ slightly between game updates.")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 bot.tree.add_command(session_group)
